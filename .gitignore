@@ -1,0 +1,4 @@
+build/
+*.exe
+screenshot_*.png
+demo/_*.png

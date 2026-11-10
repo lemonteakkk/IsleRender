@@ -1,0 +1,42 @@
+// GPU instance culling: one invocation per prop instance, run once per render pass.
+// Survivors are appended to that pass's region of the visible-instance buffer and counted
+// directly into the matching DrawElementsIndirectCommand.instanceCount.
+layout(local_size_x = 64) in;
+
+struct Instance {
+    mat4 model;
+    vec4 sphere;  // world-space bounding sphere (xyz centre, w radius)
+    uvec4 info;   // x = batch index, y = batch offset inside the pass region
+};
+
+layout(std430, binding = 0) readonly buffer Instances { Instance instances[]; };
+layout(std430, binding = 1) buffer Commands { uint commands[]; };  // 5 uints per command
+layout(std430, binding = 2) writeonly buffer Visible { mat4 visible[]; };
+
+uniform vec4 uPlanes[6];
+uniform uint uInstanceCount;
+uniform uint uCmdBase;   // first command of this pass
+uniform uint uOutBase;   // first output slot of this pass
+uniform int uCullEnabled;
+uniform int uScreenCull; // camera pass only: drop objects smaller than a few pixels
+uniform vec3 uCamPos;
+uniform float uMinRatio; // radius / distance below which an object is too small to see
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= uInstanceCount) return;
+    vec4 s = instances[i].sphere;
+
+    if (uCullEnabled != 0) {
+        for (int p = 0; p < 6; ++p)
+            if (dot(uPlanes[p].xyz, s.xyz) + uPlanes[p].w < -s.w) return;
+        if (uScreenCull != 0) {
+            float d = max(distance(uCamPos, s.xyz), 1e-3);
+            if (s.w / d < uMinRatio) return;
+        }
+    }
+
+    uvec4 info = instances[i].info;
+    uint slot = atomicAdd(commands[(uCmdBase + info.x) * 5u + 1u], 1u);
+    visible[uOutBase + info.y + slot] = instances[i].model;
+}
